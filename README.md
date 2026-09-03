@@ -1,5 +1,7 @@
 # slint-demo
 
+[![Windows x64 Release](https://github.com/cdd1037/slint-demo/actions/workflows/windows-x64.yml/badge.svg)](https://github.com/cdd1037/slint-demo/actions/workflows/windows-x64.yml)
+
 A minimal Slint + Rust demo for Windows x64, tuned for a small Release binary.
 
 ## Stack
