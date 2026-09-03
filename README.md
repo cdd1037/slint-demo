@@ -2,7 +2,7 @@
 
 [![Windows x64 Size Benchmark](https://github.com/cdd1037/slint-demo/actions/workflows/windows-x64.yml/badge.svg)](https://github.com/cdd1037/slint-demo/actions/workflows/windows-x64.yml)
 
-A minimal Slint + Rust demo for Windows x64, tuned and benchmarked for Release binary size.
+A minimal Slint + Rust demo for Windows x64, tuned and benchmarked for Release binary size and runtime process memory.
 
 ## Measured Windows x64 size
 
@@ -18,6 +18,19 @@ The UI intentionally uses only built-in `Rectangle`, `Text`, and `TouchArea` ele
 FemtoVG is **122,368 bytes (~0.117 MiB)** smaller than the software-renderer build in this benchmark.
 
 For reference, the earlier FemtoVG build using standard widgets was **7,128,064 bytes (~6.8 MiB)**. The minimal built-in UI plus linker tuning reduced that build by **61,440 bytes (~0.86%)**.
+
+## Measured idle process memory
+
+GitHub-hosted Windows has no usable hardware OpenGL context for this FemtoVG executable, so the CI comparison runs FemtoVG through Mesa3D `llvmpipe` (CPU software OpenGL). Each app is warmed up for 5 seconds and then sampled 10 times at 1-second intervals on the same runner.
+
+| Renderer | Avg working set | Peak working set | Avg private bytes | Peak private bytes | Avg handles | Avg threads |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| FemtoVG + Mesa llvmpipe | 83.531 MiB | 83.531 MiB | 66.602 MiB | 66.602 MiB | 230 | 15 |
+| Slint software renderer | 17.676 MiB | 17.676 MiB | 3.223 MiB | 3.223 MiB | 199 | 8 |
+
+These numbers show that Slint's software renderer is much lighter in this headless CI environment. The FemtoVG number is **not** representative of normal GPU-backed FemtoVG on a Windows desktop because it includes Mesa/llvmpipe CPU rendering overhead. Process Working Set and Private Bytes also do not fully account for GPU-driver or VRAM allocations.
+
+For a representative hardware-accelerated FemtoVG measurement, run the same benchmark on a physical Windows machine or a self-hosted GitHub Actions runner with a real GPU/OpenGL driver.
 
 ## Stack
 
@@ -59,9 +72,11 @@ target\x86_64-pc-windows-msvc\release\slint-demo.exe
 
 ## GitHub Actions
 
-The `Windows x64 Size Benchmark` workflow builds both renderer variants in parallel, reports the exact executable sizes, uploads each executable as a separate artifact, and produces a final comparison table.
+`Windows x64 Size Benchmark` runs on pushes and pull requests, builds both renderer variants, reports exact EXE sizes, and uploads each executable as a separate artifact.
 
-Artifacts:
+`Windows x64 Memory Benchmark (Mesa CI)` is manual-only. Supply a successful size-benchmark run ID; it downloads both executables, injects Mesa3D llvmpipe for FemtoVG, samples process memory, and uploads the raw `memory.json` result.
+
+Artifacts from the size benchmark:
 
 - `slint-demo-femtovg-windows-x64`
 - `slint-demo-software-windows-x64`
