@@ -1,4 +1,4 @@
-name: Windows x64 Size Benchmark
+name: Windows x64 Size and Memory Benchmark
 
 on:
   push:
@@ -81,7 +81,7 @@ jobs:
           compression-level: 9
 
   compare:
-    name: Compare executable sizes
+    name: Compare size and memory
     runs-on: windows-latest
     needs: build
 
@@ -93,34 +93,147 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Benchmark process memory
+        shell: pwsh
+        run: |
+          function Measure-AppMemory {
+            param(
+              [string]$Renderer,
+              [string]$ExePath
+            )
+
+            Write-Host "Starting $Renderer: $ExePath"
+            $proc = Start-Process -FilePath $ExePath -PassThru
+
+            try {
+              # Allow window creation, renderer initialization and font setup to settle.
+              Start-Sleep -Seconds 5
+
+              $proc.Refresh()
+              if ($proc.HasExited) {
+                throw "$Renderer exited before memory sampling (exit code $($proc.ExitCode))"
+              }
+
+              $samples = @()
+              for ($i = 1; $i -le 10; $i++) {
+                $p = Get-Process -Id $proc.Id -ErrorAction Stop
+                $p.Refresh()
+
+                $samples += [pscustomobject]@{
+                  WorkingSetBytes = [int64]$p.WorkingSet64
+                  PrivateBytes = [int64]$p.PrivateMemorySize64
+                  PagedBytes = [int64]$p.PagedMemorySize64
+                  Handles = [int]$p.HandleCount
+                  Threads = [int]$p.Threads.Count
+                }
+
+                Start-Sleep -Seconds 1
+              }
+
+              $avgWorkingSet = [int64](($samples | Measure-Object WorkingSetBytes -Average).Average)
+              $peakWorkingSet = [int64](($samples | Measure-Object WorkingSetBytes -Maximum).Maximum)
+              $avgPrivate = [int64](($samples | Measure-Object PrivateBytes -Average).Average)
+              $peakPrivate = [int64](($samples | Measure-Object PrivateBytes -Maximum).Maximum)
+              $avgPaged = [int64](($samples | Measure-Object PagedBytes -Average).Average)
+              $peakPaged = [int64](($samples | Measure-Object PagedBytes -Maximum).Maximum)
+              $avgHandles = [math]::Round(($samples | Measure-Object Handles -Average).Average, 1)
+              $avgThreads = [math]::Round(($samples | Measure-Object Threads -Average).Average, 1)
+
+              return [pscustomobject]@{
+                renderer = $Renderer
+                samples = $samples.Count
+                avgWorkingSetBytes = $avgWorkingSet
+                peakWorkingSetBytes = $peakWorkingSet
+                avgPrivateBytes = $avgPrivate
+                peakPrivateBytes = $peakPrivate
+                avgPagedBytes = $avgPaged
+                peakPagedBytes = $peakPaged
+                avgHandles = $avgHandles
+                avgThreads = $avgThreads
+              }
+            }
+            finally {
+              if (!$proc.HasExited) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                $proc.WaitForExit(5000) | Out-Null
+              }
+            }
+          }
+
+          # Run both variants sequentially on the same runner to reduce machine-to-machine noise.
+          $femto = Measure-AppMemory -Renderer "FemtoVG" -ExePath "artifacts\slint-demo-femtovg.exe"
+          Start-Sleep -Seconds 3
+          $software = Measure-AppMemory -Renderer "Software" -ExePath "artifacts\slint-demo-software.exe"
+
+          New-Item -ItemType Directory -Force benchmark | Out-Null
+          @($femto, $software) | ConvertTo-Json -Depth 4 | Set-Content benchmark\memory.json -Encoding utf8
+
+          $femto | ConvertTo-Json -Compress | Write-Host
+          $software | ConvertTo-Json -Compress | Write-Host
+
       - name: Write comparison summary
         shell: pwsh
         run: |
-          $femto = Get-Item "artifacts\slint-demo-femtovg.exe"
-          $software = Get-Item "artifacts\slint-demo-software.exe"
+          $femtoExe = Get-Item "artifacts\slint-demo-femtovg.exe"
+          $softwareExe = Get-Item "artifacts\slint-demo-software.exe"
+          $memory = Get-Content "benchmark\memory.json" -Raw | ConvertFrom-Json
+          $femto = $memory | Where-Object renderer -eq "FemtoVG"
+          $software = $memory | Where-Object renderer -eq "Software"
 
-          $femtoMiB = [math]::Round($femto.Length / 1MB, 3)
-          $softwareMiB = [math]::Round($software.Length / 1MB, 3)
-          $delta = $femto.Length - $software.Length
-          $deltaMiB = [math]::Round([math]::Abs($delta) / 1MB, 3)
-
-          if ($software.Length -lt $femto.Length) {
-            $winner = "Software"
-          } elseif ($femto.Length -lt $software.Length) {
-            $winner = "FemtoVG"
-          } else {
-            $winner = "Tie"
+          function MiB([double]$bytes) {
+            return [math]::Round($bytes / 1MB, 3)
           }
 
-          "## Slint Windows x64 size comparison" >> $env:GITHUB_STEP_SUMMARY
+          $femtoSizeMiB = MiB $femtoExe.Length
+          $softwareSizeMiB = MiB $softwareExe.Length
+          $sizeDeltaMiB = [math]::Round([math]::Abs($femtoExe.Length - $softwareExe.Length) / 1MB, 3)
+
+          if ($softwareExe.Length -lt $femtoExe.Length) {
+            $sizeWinner = "Software"
+          } elseif ($femtoExe.Length -lt $softwareExe.Length) {
+            $sizeWinner = "FemtoVG"
+          } else {
+            $sizeWinner = "Tie"
+          }
+
+          $femtoAvgWs = MiB $femto.avgWorkingSetBytes
+          $softwareAvgWs = MiB $software.avgWorkingSetBytes
+          $femtoPeakWs = MiB $femto.peakWorkingSetBytes
+          $softwarePeakWs = MiB $software.peakWorkingSetBytes
+          $femtoAvgPrivate = MiB $femto.avgPrivateBytes
+          $softwareAvgPrivate = MiB $software.avgPrivateBytes
+          $femtoPeakPrivate = MiB $femto.peakPrivateBytes
+          $softwarePeakPrivate = MiB $software.peakPrivateBytes
+
+          "## Slint Windows x64 size + memory comparison" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "### Executable size" >> $env:GITHUB_STEP_SUMMARY
           "" >> $env:GITHUB_STEP_SUMMARY
           "| Renderer | Bytes | MiB |" >> $env:GITHUB_STEP_SUMMARY
           "|---|---:|---:|" >> $env:GITHUB_STEP_SUMMARY
-          "| FemtoVG | $($femto.Length) | $femtoMiB |" >> $env:GITHUB_STEP_SUMMARY
-          "| Software | $($software.Length) | $softwareMiB |" >> $env:GITHUB_STEP_SUMMARY
+          "| FemtoVG | $($femtoExe.Length) | $femtoSizeMiB |" >> $env:GITHUB_STEP_SUMMARY
+          "| Software | $($softwareExe.Length) | $softwareSizeMiB |" >> $env:GITHUB_STEP_SUMMARY
           "" >> $env:GITHUB_STEP_SUMMARY
-          "**Smallest: $winner** — difference: $deltaMiB MiB" >> $env:GITHUB_STEP_SUMMARY
+          "**Smallest EXE: $sizeWinner** — difference: $sizeDeltaMiB MiB" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "### Runtime process memory" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "Each executable is warmed up for 5 seconds, then sampled 10 times at 1-second intervals on the same GitHub-hosted Windows runner." >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "| Renderer | Avg working set | Peak working set | Avg private bytes | Peak private bytes | Avg handles | Avg threads |" >> $env:GITHUB_STEP_SUMMARY
+          "|---|---:|---:|---:|---:|---:|---:|" >> $env:GITHUB_STEP_SUMMARY
+          "| FemtoVG | $femtoAvgWs MiB | $femtoPeakWs MiB | $femtoAvgPrivate MiB | $femtoPeakPrivate MiB | $($femto.avgHandles) | $($femto.avgThreads) |" >> $env:GITHUB_STEP_SUMMARY
+          "| Software | $softwareAvgWs MiB | $softwarePeakWs MiB | $softwareAvgPrivate MiB | $softwarePeakPrivate MiB | $($software.avgHandles) | $($software.avgThreads) |" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "> Working set/private bytes are process-memory measurements. FemtoVG may also use graphics-driver/GPU memory that these counters do not fully capture; GitHub-hosted runners are not representative of a physical GPU desktop." >> $env:GITHUB_STEP_SUMMARY
 
-          Write-Host "FemtoVG: $($femto.Length) bytes ($femtoMiB MiB)"
-          Write-Host "Software: $($software.Length) bytes ($softwareMiB MiB)"
-          Write-Host "Smallest: $winner"
+          Write-Host "FemtoVG avg WS: $femtoAvgWs MiB, peak WS: $femtoPeakWs MiB, avg private: $femtoAvgPrivate MiB"
+          Write-Host "Software avg WS: $softwareAvgWs MiB, peak WS: $softwarePeakWs MiB, avg private: $softwareAvgPrivate MiB"
+
+      - name: Upload benchmark data
+        uses: actions/upload-artifact@v4
+        with:
+          name: slint-demo-memory-benchmark
+          path: benchmark/memory.json
+          if-no-files-found: error
+          retention-days: 30
