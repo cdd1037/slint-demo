@@ -1,0 +1,148 @@
+name: Windows x64 Memory Benchmark (Mesa CI)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  memory:
+    runs-on: windows-latest
+
+    steps:
+      - name: Download existing renderer executables
+        uses: actions/download-artifact@v4
+        with:
+          repository: cdd1037/slint-demo
+          run-id: 33744735917
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: slint-demo-*-windows-x64
+          path: artifacts
+          merge-multiple: true
+
+      - name: Prepare isolated app folders
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bench\femto, bench\software | Out-Null
+          Copy-Item artifacts\slint-demo-femtovg.exe bench\femto\slint-demo-femtovg.exe
+          Copy-Item artifacts\slint-demo-software.exe bench\software\slint-demo-software.exe
+
+      - name: Install Mesa3D llvmpipe for FemtoVG
+        shell: pwsh
+        run: |
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.0/mesa3d-26.2.0-release-msvc.7z"
+          Invoke-WebRequest -Uri $url -OutFile mesa3d.7z
+          & 7z x mesa3d.7z -omesa3d -y | Out-Host
+
+          $gl = Get-ChildItem mesa3d -Recurse -Filter opengl32.dll |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]' } |
+            Select-Object -First 1
+          if (!$gl) { throw "Mesa x64 opengl32.dll not found" }
+
+          $mesaX64 = Split-Path $gl.FullName
+          Write-Host "Using Mesa x64 DLLs from: $mesaX64"
+          Copy-Item "$mesaX64\*.dll" bench\femto -Force
+          New-Item -ItemType File -Force bench\femto\slint-demo-femtovg.exe.local | Out-Null
+
+          Get-ChildItem bench\femto\*.dll | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Benchmark memory
+        shell: pwsh
+        run: |
+          function Measure-AppMemory {
+            param(
+              [string]$Renderer,
+              [string]$ExePath,
+              [hashtable]$Environment = @{}
+            )
+
+            $saved = @{}
+            foreach ($key in $Environment.Keys) {
+              $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+              [Environment]::SetEnvironmentVariable($key, $Environment[$key], 'Process')
+            }
+
+            Write-Host "Starting ${Renderer}: $ExePath"
+            $proc = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -PassThru
+            try {
+              Start-Sleep -Seconds 5
+              $proc.Refresh()
+              if ($proc.HasExited) {
+                throw "$Renderer exited before memory sampling (exit code $($proc.ExitCode))"
+              }
+
+              $samples = for ($i = 1; $i -le 10; $i++) {
+                $p = Get-Process -Id $proc.Id -ErrorAction Stop
+                $p.Refresh()
+                [pscustomobject]@{
+                  WorkingSetBytes = [int64]$p.WorkingSet64
+                  PrivateBytes = [int64]$p.PrivateMemorySize64
+                  Handles = [int]$p.HandleCount
+                  Threads = [int]$p.Threads.Count
+                }
+                Start-Sleep -Seconds 1
+              }
+
+              [pscustomobject]@{
+                renderer = $Renderer
+                samples = $samples.Count
+                avgWorkingSetBytes = [int64](($samples | Measure-Object WorkingSetBytes -Average).Average)
+                peakWorkingSetBytes = [int64](($samples | Measure-Object WorkingSetBytes -Maximum).Maximum)
+                avgPrivateBytes = [int64](($samples | Measure-Object PrivateBytes -Average).Average)
+                peakPrivateBytes = [int64](($samples | Measure-Object PrivateBytes -Maximum).Maximum)
+                avgHandles = [math]::Round(($samples | Measure-Object Handles -Average).Average, 1)
+                avgThreads = [math]::Round(($samples | Measure-Object Threads -Average).Average, 1)
+              }
+            }
+            finally {
+              if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+              foreach ($key in $Environment.Keys) {
+                [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process')
+              }
+            }
+          }
+
+          $mesaEnv = @{
+            GALLIUM_DRIVER = 'llvmpipe'
+            LIBGL_ALWAYS_SOFTWARE = 'true'
+          }
+
+          $femto = Measure-AppMemory "FemtoVG + Mesa llvmpipe" "$PWD\bench\femto\slint-demo-femtovg.exe" $mesaEnv
+          Start-Sleep -Seconds 3
+          $software = Measure-AppMemory "Slint software renderer" "$PWD\bench\software\slint-demo-software.exe"
+
+          @($femto, $software) | ConvertTo-Json -Depth 4 | Set-Content memory.json -Encoding utf8
+          $femto | ConvertTo-Json -Compress | Write-Host
+          $software | ConvertTo-Json -Compress | Write-Host
+
+      - name: Report results
+        shell: pwsh
+        run: |
+          $m = Get-Content memory.json -Raw | ConvertFrom-Json
+          function MiB([double]$v) { [math]::Round($v / 1MB, 3) }
+
+          "## Windows x64 runtime memory" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "| Renderer | Avg working set | Peak working set | Avg private | Peak private | Handles | Threads |" >> $env:GITHUB_STEP_SUMMARY
+          "|---|---:|---:|---:|---:|---:|---:|" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($r in $m) {
+            $avgWs = MiB $r.avgWorkingSetBytes
+            $peakWs = MiB $r.peakWorkingSetBytes
+            $avgPrivate = MiB $r.avgPrivateBytes
+            $peakPrivate = MiB $r.peakPrivateBytes
+            "| $($r.renderer) | $avgWs MiB | $peakWs MiB | $avgPrivate MiB | $peakPrivate MiB | $($r.avgHandles) | $($r.avgThreads) |" >> $env:GITHUB_STEP_SUMMARY
+            Write-Host "$($r.renderer): avg WS $avgWs MiB; peak WS $peakWs MiB; avg private $avgPrivate MiB; peak private $peakPrivate MiB"
+          }
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "> FemtoVG uses Mesa3D llvmpipe because GitHub-hosted Windows has no usable hardware OpenGL context. This is a CI software-OpenGL measurement, not representative of GPU VRAM usage on a normal desktop." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload raw memory data
+        uses: actions/upload-artifact@v4
+        with:
+          name: slint-demo-memory-ci
+          path: memory.json
+          retention-days: 30
