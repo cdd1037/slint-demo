@@ -1,9 +1,12 @@
 name: Windows x64 Memory Benchmark (Mesa CI)
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Windows x64 Size Benchmark run ID containing both renderer artifacts
+        required: true
+        default: "33744735917"
 
 permissions:
   actions: read
@@ -18,7 +21,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           repository: cdd1037/slint-demo
-          run-id: 33744735917
+          run-id: ${{ inputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           pattern: slint-demo-*-windows-x64
           path: artifacts
@@ -47,8 +50,6 @@ jobs:
           Write-Host "Using Mesa x64 DLLs from: $mesaX64"
           Copy-Item "$mesaX64\*.dll" bench\femto -Force
           New-Item -ItemType File -Force bench\femto\slint-demo-femtovg.exe.local | Out-Null
-
-          Get-ChildItem bench\femto\*.dll | Select-Object Name, Length | Format-Table -AutoSize
 
       - name: Benchmark memory
         shell: pwsh
@@ -138,7 +139,7 @@ jobs:
             Write-Host "$($r.renderer): avg WS $avgWs MiB; peak WS $peakWs MiB; avg private $avgPrivate MiB; peak private $peakPrivate MiB"
           }
           "" >> $env:GITHUB_STEP_SUMMARY
-          "> FemtoVG uses Mesa3D llvmpipe because GitHub-hosted Windows has no usable hardware OpenGL context. This is a CI software-OpenGL measurement, not representative of GPU VRAM usage on a normal desktop." >> $env:GITHUB_STEP_SUMMARY
+          "> FemtoVG uses Mesa3D llvmpipe because GitHub-hosted Windows has no usable hardware OpenGL context. This is a CI software-OpenGL measurement, not representative of GPU-backed FemtoVG on a normal desktop." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Upload raw memory data
         uses: actions/upload-artifact@v4
