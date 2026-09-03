@@ -3,12 +3,16 @@ name = "slint-demo"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["renderer-femtovg"]
+renderer-femtovg = ["slint/renderer-femtovg"]
+renderer-software = ["slint/renderer-software"]
+
 [dependencies]
 slint = { version = "~1.17", default-features = false, features = [
     "std",
     "compat-1-2",
     "backend-winit",
-    "renderer-femtovg",
 ] }
 
 [build-dependencies]
@@ -16,7 +20,9 @@ slint-build = "~1.17"
 
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+debug = false
+incremental = false
