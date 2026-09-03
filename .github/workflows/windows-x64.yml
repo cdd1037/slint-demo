@@ -1,4 +1,4 @@
-name: Windows x64 Release
+name: Windows x64 Size Benchmark
 
 on:
   push:
@@ -14,8 +14,16 @@ env:
 
 jobs:
   build:
-    name: Build x86_64-pc-windows-msvc
+    name: ${{ matrix.renderer }} / x86_64-pc-windows-msvc
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - renderer: femtovg
+            feature: renderer-femtovg
+          - renderer: software
+            feature: renderer-software
 
     steps:
       - name: Checkout
@@ -29,12 +37,19 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: windows-x64
+          shared-key: windows-x64-${{ matrix.renderer }}
 
-      - name: Build Release
-        run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Build minimal Release
+        env:
+          RUSTFLAGS: -C link-arg=/OPT:REF -C link-arg=/OPT:ICF
+        run: >-
+          cargo build
+          --release
+          --target x86_64-pc-windows-msvc
+          --no-default-features
+          --features ${{ matrix.feature }}
 
-      - name: Stage artifact and report size
+      - name: Stage executable and report size
         shell: pwsh
         run: |
           $exe = "target\x86_64-pc-windows-msvc\release\slint-demo.exe"
@@ -43,25 +58,69 @@ jobs:
           }
 
           $bytes = (Get-Item $exe).Length
-          $mib = [math]::Round($bytes / 1MB, 2)
-          Write-Host "slint-demo.exe: $bytes bytes ($mib MiB)"
+          $mib = [math]::Round($bytes / 1MB, 3)
+          Write-Host "${{ matrix.renderer }}: $bytes bytes ($mib MiB)"
 
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item $exe "dist\slint-demo.exe"
-          Compress-Archive -Path "dist\slint-demo.exe" -DestinationPath "dist\slint-demo-windows-x64.zip" -Force
+          $output = "dist\slint-demo-${{ matrix.renderer }}.exe"
+          Copy-Item $exe $output
 
-          "### Windows x64 Release" >> $env:GITHUB_STEP_SUMMARY
+          "### Windows x64 — ${{ matrix.renderer }}" >> $env:GITHUB_STEP_SUMMARY
           "" >> $env:GITHUB_STEP_SUMMARY
           "- Target: ``x86_64-pc-windows-msvc``" >> $env:GITHUB_STEP_SUMMARY
+          "- Feature: ``${{ matrix.feature }}``" >> $env:GITHUB_STEP_SUMMARY
           "- EXE size: **$bytes bytes ($mib MiB)**" >> $env:GITHUB_STEP_SUMMARY
-          "- Renderer: **FemtoVG**" >> $env:GITHUB_STEP_SUMMARY
 
-      - name: Upload Windows x64 artifact
+      - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: slint-demo-windows-x64
-          path: |
-            dist/slint-demo.exe
-            dist/slint-demo-windows-x64.zip
+          name: slint-demo-${{ matrix.renderer }}-windows-x64
+          path: dist/slint-demo-${{ matrix.renderer }}.exe
           if-no-files-found: error
           retention-days: 30
+          compression-level: 9
+
+  compare:
+    name: Compare executable sizes
+    runs-on: windows-latest
+    needs: build
+
+    steps:
+      - name: Download benchmark executables
+        uses: actions/download-artifact@v4
+        with:
+          pattern: slint-demo-*-windows-x64
+          path: artifacts
+          merge-multiple: true
+
+      - name: Write comparison summary
+        shell: pwsh
+        run: |
+          $femto = Get-Item "artifacts\slint-demo-femtovg.exe"
+          $software = Get-Item "artifacts\slint-demo-software.exe"
+
+          $femtoMiB = [math]::Round($femto.Length / 1MB, 3)
+          $softwareMiB = [math]::Round($software.Length / 1MB, 3)
+          $delta = $femto.Length - $software.Length
+          $deltaMiB = [math]::Round([math]::Abs($delta) / 1MB, 3)
+
+          if ($software.Length -lt $femto.Length) {
+            $winner = "Software"
+          } elseif ($femto.Length -lt $software.Length) {
+            $winner = "FemtoVG"
+          } else {
+            $winner = "Tie"
+          }
+
+          "## Slint Windows x64 size comparison" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "| Renderer | Bytes | MiB |" >> $env:GITHUB_STEP_SUMMARY
+          "|---|---:|---:|" >> $env:GITHUB_STEP_SUMMARY
+          "| FemtoVG | $($femto.Length) | $femtoMiB |" >> $env:GITHUB_STEP_SUMMARY
+          "| Software | $($software.Length) | $softwareMiB |" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "**Smallest: $winner** — difference: $deltaMiB MiB" >> $env:GITHUB_STEP_SUMMARY
+
+          Write-Host "FemtoVG: $($femto.Length) bytes ($femtoMiB MiB)"
+          Write-Host "Software: $($software.Length) bytes ($softwareMiB MiB)"
+          Write-Host "Smallest: $winner"
