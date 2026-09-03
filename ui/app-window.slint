@@ -1,5 +1,3 @@
-import { Button, HorizontalBox, VerticalBox } from "std-widgets.slint";
-
 export component AppWindow inherits Window {
     in-out property<int> counter: 0;
     callback increment();
@@ -10,49 +8,85 @@ export component AppWindow inherits Window {
     height: 260px;
     background: #f6f7f9;
 
-    VerticalBox {
-        padding: 24px;
-        spacing: 16px;
+    Text {
+        x: 24px;
+        y: 22px;
+        width: parent.width - 48px;
+        height: 34px;
+        text: "Slint Windows x64";
+        font-size: 26px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 24px;
+        y: 62px;
+        width: parent.width - 48px;
+        height: 24px;
+        text: "minimal size benchmark";
+        color: #666;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        x: 24px;
+        y: 100px;
+        width: parent.width - 48px;
+        height: 58px;
+        border-radius: 8px;
+        background: white;
 
         Text {
-            text: "Slint Windows x64";
-            font-size: 26px;
-            font-weight: 700;
+            text: "Counter: " + root.counter;
+            font-size: 22px;
             horizontal-alignment: center;
+            vertical-alignment: center;
         }
+    }
+
+    Rectangle {
+        x: 24px;
+        y: 178px;
+        width: 180px;
+        height: 48px;
+        border-radius: 6px;
+        background: #2764d8;
 
         Text {
-            text: "Release size demo · FemtoVG";
-            color: #666;
+            text: "+1 (Rust callback)";
+            color: white;
             font-size: 14px;
             horizontal-alignment: center;
+            vertical-alignment: center;
         }
 
-        Rectangle {
-            height: 70px;
-            border-radius: 8px;
-            background: white;
+        TouchArea {
+            clicked => { root.increment(); }
+        }
+    }
 
-            Text {
-                text: "Counter: " + root.counter;
-                font-size: 22px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+    Rectangle {
+        x: 216px;
+        y: 178px;
+        width: 180px;
+        height: 48px;
+        border-radius: 6px;
+        background: #e4e7ec;
+
+        Text {
+            text: "Reset";
+            color: #222;
+            font-size: 14px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
 
-        HorizontalBox {
-            spacing: 12px;
-
-            Button {
-                text: "+1 (Rust callback)";
-                clicked => { root.increment(); }
-            }
-
-            Button {
-                text: "Reset";
-                clicked => { root.reset(); }
-            }
+        TouchArea {
+            clicked => { root.reset(); }
         }
     }
 }
