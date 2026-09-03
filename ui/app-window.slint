@@ -1,0 +1,58 @@
+import { Button, HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    in-out property<int> counter: 0;
+    callback increment();
+    callback reset();
+
+    title: "Slint Windows x64 Demo";
+    width: 420px;
+    height: 260px;
+    background: #f6f7f9;
+
+    VerticalBox {
+        padding: 24px;
+        spacing: 16px;
+
+        Text {
+            text: "Slint Windows x64";
+            font-size: 26px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "Release size demo · FemtoVG";
+            color: #666;
+            font-size: 14px;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {
+            height: 70px;
+            border-radius: 8px;
+            background: white;
+
+            Text {
+                text: "Counter: " + root.counter;
+                font-size: 22px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalBox {
+            spacing: 12px;
+
+            Button {
+                text: "+1 (Rust callback)";
+                clicked => { root.increment(); }
+            }
+
+            Button {
+                text: "Reset";
+                clicked => { root.reset(); }
+            }
+        }
+    }
+}
